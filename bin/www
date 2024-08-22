@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+const app = require('../app');
+const debug = require('debug')('express-sequelize');
+const http = require('http');
+const models = require('../models');
+
+/**
+ * Get port from environment and store in Express.
+ */
+const port = normalizePort(process.env.PORT || '3000');
+app.set('port', port);
+
+/**
+ * Create HTTP server.
+ */
+const server = http.createServer(app);
+
+/**
+ * Create SocketIO
+ */
+const io = require('socket.io')(server);
+let clients = {};
+let ops = [];
+io.on('connection', socket => {
+  console.log('socket user connected');
+  clients[socket.id] = null
+  console.log(clients)
+
+  socket.on('disconnect', function () {
+    delete clients[socket.id]
+
+    if (ops.indexOf(socket.id) !== -1) {
+      ops.splice(ops.indexOf(socket.id), 1)
+    }
+    ops.forEach(value => {
+      io.to(value).emit('clients', Object.values(clients))
+    })
+  })
+
+  socket.on('welcome', function (userData) {
+    console.log('User welcomes: ' + userData)
+    clients[socket.id] = userData
+
+    models.User.findByPk(userData)
+      .then(user => {
+        if (user && user.role === 'operator') {
+          ops.push(socket.id)
+        }
+      })
+
+    ops.forEach(value => {
+      io.to(value).emit('clients', Object.values(clients))
+    })
+  })
+
+  socket.on('byebye', function () {
+    console.log('sb logged out')
+    clients[socket.id] = null
+
+    if (ops.indexOf(socket.id) !== -1) {
+      ops.splice(ops.indexOf(socket.id), 1)
+    }
+    ops.forEach(value => {
+      io.to(value).emit('clients', Object.values(clients))
+    })
+  })
+
+  socket.on('vote confirmation', (data) => {
+    models.Voting.findByPk(data.id)
+      .then(voting => {
+        console.log(voting);
+      });
+  });
+
+  socket.on('startPart', () => {
+    console.log('socket: startPart');
+    io.emit('part started');
+  });
+  socket.on('endPart', () => {
+    console.log('socket: endPart');
+    io.emit('part ended');
+  });
+  socket.on('startVoting', () => {
+    console.log('socket: startVoting');
+    io.emit('voting started');
+  });
+  socket.on('endVoting', () => {
+    console.log('socket: endVoting');
+    io.emit('voting ended');
+  });
+  socket.on('voted', () => {
+    console.log('socket: voted')
+
+    ops.forEach(value => {
+      io.to(value).emit('new vote', clients[socket.id])
+    })
+  });
+});
+
+models.sequelize.sync().then(function () {
+  /**
+   * Listen on provided port, on all network interfaces.
+   */
+  server.listen(port, function () {
+    debug('Express server listening on port ' + server.address().port);
+  });
+  server.on('error', onError);
+  server.on('listening', onListening);
+});
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+function normalizePort(val) {
+  let port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  let bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+function onListening() {
+  let addr = server.address();
+  let bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  debug('Listening on ' + bind);
+}
